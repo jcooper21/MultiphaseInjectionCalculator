@@ -245,7 +245,15 @@ export class CalculatorService {
       const Re = this.calculateReynolds(V, D, fluidDensity, fluidViscosity);
       const relativeRoughness = segment.roughness / (D * 1000);
       const f = this.calculateFrictionFactor(Re, relativeRoughness);
-      
+
+      // PRODUCTION FIX: Validate friction factor
+      if (!isFinite(f) || f < 0.0001 || f > 0.15) {
+        throw new Error(
+          `Invalid friction factor calculated in segment ${index + 1}: f=${f.toFixed(6)}. ` +
+          `Expected range: 0.0001-0.15. Re=${Re.toFixed(0)}, ε/D=${relativeRoughness.toExponential(2)}`
+        );
+      }
+
       const hf = V === 0 ? 0 : f * (L / D) * (Math.pow(V, 2) / (2 * GRAVITY));
       const frictionPressureLoss = fluidDensity * GRAVITY * hf;
       const hydrostaticGain = fluidDensity * GRAVITY * L;
@@ -309,9 +317,9 @@ export class CalculatorService {
       frictionLosses.push({ loss: frictionPressureLoss, regime: flowRegime });
 
       if(segment.id !== -1) {
-        // ROBUSTNESS FIX: Validate critical values before adding to results
-        this.validateCalculationValue(V, 'velocity', index + 1, 0, 100);
-        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 300e6);
+        // PRODUCTION FIX: Strict validation for professional petroleum engineering use
+        this.validateCalculationValue(V, 'velocity', index + 1, 0, 50);
+        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 200e6);
         this.validateCalculationValue(Re, 'Reynolds number', index + 1, 0, 1e8);
 
         segmentResults.push({
@@ -475,6 +483,14 @@ export class CalculatorService {
       const relativeRoughness = segment.roughness / (D * 1000);
       const f = this.calculateFrictionFactor(Re, relativeRoughness);
 
+      // PRODUCTION FIX: Validate friction factor
+      if (!isFinite(f) || f < 0.0001 || f > 0.15) {
+        throw new Error(
+          `Invalid friction factor calculated in segment ${index + 1}: f=${f.toFixed(6)}. ` +
+          `Expected range: 0.0001-0.15. Re=${Re.toFixed(0)}, ε/D=${relativeRoughness.toExponential(2)}`
+        );
+      }
+
       // Friction pressure loss
       const hf = V === 0 ? 0 : f * (L / D) * (Math.pow(V, 2) / (2 * GRAVITY));
       const frictionPressureLoss = rho_gas * GRAVITY * hf;
@@ -544,12 +560,19 @@ export class CalculatorService {
       const flowRegime = Re < LAMINAR_FLOW_LIMIT ? 'Laminar' : Re < TURBULENT_FLOW_START ? 'Transitional' : 'Turbulent';
 
       if (segment.id !== -1) {
-        // ROBUSTNESS FIX: Validate critical values before adding to results
-        this.validateCalculationValue(V, 'velocity', index + 1, 0, 500);
-        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 300e6);
-        this.validateCalculationValue(rho_gas, 'gas density', index + 1, 0.1, 500);
+        // PRODUCTION FIX: Strict validation for professional petroleum engineering use
+        // Velocity validation with explicit supersonic check
+        if (V > speedOfSound) {
+          throw new Error(
+            `🚨 SUPERSONIC FLOW in segment ${index + 1}: V=${V.toFixed(1)} m/s > c=${speedOfSound.toFixed(1)} m/s (M=${machNumber.toFixed(2)}). ` +
+            `Equations are INVALID for supersonic flow (M > 1.0). Reduce flow rate or increase diameter.`
+          );
+        }
+        this.validateCalculationValue(V, 'velocity', index + 1, 0, 150);
+        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 200e6);
+        this.validateCalculationValue(rho_gas, 'gas density', index + 1, 5, 300);
         this.validateCalculationValue(Z, 'Z-factor', index + 1, 0.2, 1.5);
-        this.validateCalculationValue(T_segment, 'temperature', index + 1, 200, 600);
+        this.validateCalculationValue(T_segment, 'temperature', index + 1, 250, 450);
 
         segmentResults.push({
           segmentNumber: index + 1,
@@ -706,25 +729,30 @@ export class CalculatorService {
       // where c = 100 for continuous service, 125 for intermittent
       const c_erosion = 100; // Conservative for continuous service
 
-      // ROBUSTNESS FIX: Guard against division by very small densities
-      // At very low densities (< 1 kg/m³), erosion velocity becomes unrealistically high
-      // Skip erosion check in these cases as the correlation is not valid
-      if (rho_gas > 1 && mpProps.actualGasVelocity) {
+      // PRODUCTION FIX: API RP 14E correlation only valid for typical production densities (ρ > 10 kg/m³)
+      // At very low densities, use absolute velocity limit instead
+      if (rho_gas > 10 && mpProps.actualGasVelocity) {
         const V_erosion_gas = c_erosion / Math.sqrt(rho_gas);
         if (isFinite(V_erosion_gas) && mpProps.actualGasVelocity > V_erosion_gas) {
           const hasErosionWarning = warnings.some(w => w.includes('Erosion'));
           if (!hasErosionWarning) {
-            warnings.push(`⚠️ EROSION WARNING: Actual gas velocity ${mpProps.actualGasVelocity.toFixed(1)} m/s exceeds erosion limit ${V_erosion_gas.toFixed(1)} m/s in segment ${index + 1}. Expect accelerated wear. Consider larger diameter.`);
+            warnings.push(`⚠️ EROSION WARNING: Actual gas velocity ${mpProps.actualGasVelocity.toFixed(1)} m/s exceeds API RP 14E erosion limit ${V_erosion_gas.toFixed(1)} m/s in segment ${index + 1}. Expect accelerated wear. Consider larger diameter.`);
           }
         }
+      } else if (rho_gas <= 10 && mpProps.actualGasVelocity && mpProps.actualGasVelocity > 50) {
+        warnings.push(
+          `⚠️ EROSION WARNING: Very high gas velocity ${mpProps.actualGasVelocity.toFixed(1)} m/s ` +
+          `at low density ${rho_gas.toFixed(1)} kg/m³ in segment ${index + 1}. ` +
+          `API RP 14E correlation not valid at this density. Use extreme caution with erosion.`
+        );
       }
 
-      if (fluidDensity > 1 && mpProps.actualLiquidVelocity) {
+      if (fluidDensity > 10 && mpProps.actualLiquidVelocity) {
         const V_erosion_liquid = c_erosion / Math.sqrt(fluidDensity);
         if (isFinite(V_erosion_liquid) && mpProps.actualLiquidVelocity > V_erosion_liquid) {
           const hasErosionWarning = warnings.some(w => w.includes('Erosion'));
           if (!hasErosionWarning) {
-            warnings.push(`⚠️ EROSION WARNING: Actual liquid velocity ${mpProps.actualLiquidVelocity.toFixed(1)} m/s exceeds erosion limit ${V_erosion_liquid.toFixed(1)} m/s in segment ${index + 1}. Expect accelerated wear.`);
+            warnings.push(`⚠️ EROSION WARNING: Actual liquid velocity ${mpProps.actualLiquidVelocity.toFixed(1)} m/s exceeds API RP 14E erosion limit ${V_erosion_liquid.toFixed(1)} m/s in segment ${index + 1}. Expect accelerated wear.`);
           }
         }
       }
@@ -761,6 +789,15 @@ export class CalculatorService {
       const f = MultiphaseFlow.calculateTwoPhasefrictionFactor(
         Re, relativeRoughness, mpProps.liquidHoldup, Vsg, Vsl
       );
+
+      // PRODUCTION FIX: Validate two-phase friction factor
+      // Can be higher than single-phase due to two-phase multiplier
+      if (!isFinite(f) || f < 0.0001 || f > 3.0) {
+        throw new Error(
+          `Invalid two-phase friction factor calculated in segment ${index + 1}: f=${f.toFixed(6)}. ` +
+          `Expected range: 0.0001-3.0. Re=${Re.toFixed(0)}, HL=${mpProps.liquidHoldup.toFixed(3)}`
+        );
+      }
 
       const hf = V === 0 ? 0 : f * (L / D) * (Math.pow(V, 2) / (2 * GRAVITY));
       const frictionPressureLoss = mpProps.mixtureDensity * GRAVITY * hf;
@@ -830,12 +867,12 @@ export class CalculatorService {
       const flowRegime = Re < LAMINAR_FLOW_LIMIT ? 'Laminar' : Re < TURBULENT_FLOW_START ? 'Transitional' : 'Turbulent';
 
       if (segment.id !== -1) {
-        // ROBUSTNESS FIX: Validate critical values before adding to results
-        this.validateCalculationValue(V, 'mixture velocity', index + 1, 0, 100);
-        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 300e6);
+        // PRODUCTION FIX: Strict validation for professional petroleum engineering use
+        this.validateCalculationValue(V, 'mixture velocity', index + 1, 0, 50);
+        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 200e6);
         this.validateCalculationValue(mpProps.gasVoidFraction, 'void fraction', index + 1, 0, 1);
         this.validateCalculationValue(mpProps.liquidHoldup, 'liquid holdup', index + 1, 0, 1);
-        this.validateCalculationValue(mpProps.mixtureDensity, 'mixture density', index + 1, 1, 2500);
+        this.validateCalculationValue(mpProps.mixtureDensity, 'mixture density', index + 1, 10, 2000);
 
         segmentResults.push({
           segmentNumber: index + 1,
