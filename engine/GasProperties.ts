@@ -41,7 +41,7 @@ export class GasProperties {
 
   /**
    * Calculate gas compressibility factor (Z-factor) using Standing-Katz correlation
-   * Simplified version for moderate pressures
+   * FIXED: Now uses iterative solution for Dranchuk-Abu-Kassem equation
    * @param pressure Pressure in Pa
    * @param temperature Temperature in K
    * @param specificGravity Specific gravity
@@ -66,7 +66,8 @@ export class GasProperties {
       return 1.0 - 0.36 * Pr / Tr;
     }
 
-    // For moderate pressures (Dranchuk-Abu-Kassem simplified)
+    // FIXED: Iterative solution for Dranchuk-Abu-Kassem equation
+    // Z and rho_r are coupled, so we iterate to convergence
     const A1 = 0.3265;
     const A2 = -1.0700;
     const A3 = -0.5339;
@@ -76,11 +77,28 @@ export class GasProperties {
     const A7 = -0.7361;
     const A8 = 0.1844;
 
-    const rho_r = 0.27 * Pr / (Tr); // Initial guess for reduced density
+    // Initial guess for Z
+    let Z = 1.0;
+    const maxIterations = 10;
+    const tolerance = 1e-6;
 
-    const Z = A1 + (A2 / Tr) + (A3 / Math.pow(Tr, 3)) +
-              (A4 / Math.pow(Tr, 4)) + (A5 / Math.pow(Tr, 5)) +
-              rho_r * (A6 + (A7 / Tr) + (A8 / Math.pow(Tr, 2)));
+    for (let i = 0; i < maxIterations; i++) {
+      const Z_old = Z;
+
+      // Calculate reduced density from current Z
+      // rho_r = Pr / (Z * Tr)
+      const rho_r = 0.27 * Pr / (Z * Tr);
+
+      // Calculate new Z from Dranchuk-Abu-Kassem equation
+      Z = A1 + (A2 / Tr) + (A3 / Math.pow(Tr, 3)) +
+          (A4 / Math.pow(Tr, 4)) + (A5 / Math.pow(Tr, 5)) +
+          rho_r * (A6 + (A7 / Tr) + (A8 / Math.pow(Tr, 2)));
+
+      // Check convergence
+      if (Math.abs(Z - Z_old) < tolerance) {
+        break;
+      }
+    }
 
     return Math.max(0.2, Math.min(1.5, Z)); // Constrain to reasonable range
   }

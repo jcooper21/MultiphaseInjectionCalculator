@@ -381,6 +381,7 @@ export class MultiphaseFlow {
 
   /**
    * Complete multiphase flow properties calculation
+   * FIXED: Surface tension is now configurable parameter
    */
   static calculateMultiphaseProperties(
     gasFlowRate: number,
@@ -392,7 +393,8 @@ export class MultiphaseFlow {
     gasDensity: number,
     liquidViscosity: number,
     gasViscosity: number,
-    Z: number = 1.0
+    Z: number = 1.0,
+    surfaceTension: number = 0.072 // FIXED: Configurable, default water-air at 20°C
   ): MultiphaseProperties {
     // Calculate superficial velocities
     const { Vsg, Vsl } = this.calculateSuperficialVelocities(
@@ -409,11 +411,6 @@ export class MultiphaseFlow {
 
     // Determine flow pattern
     const flowPattern = this.determineFlowPattern(Vsg, Vsl, diameter);
-
-    // PRIORITY 2 FIX: Surface tension for water-gas interface at typical conditions
-    // Water-air: 0.072 N/m at 20°C, decreases with temperature
-    // For simplicity, use constant value (could be temperature-dependent in future)
-    const surfaceTension = 0.072; // N/m
 
     // Calculate liquid holdup with surface tension
     const liquidHoldup = this.calculateLiquidHoldup(Vsg, Vsl, flowPattern, liquidDensity, gasDensity, surfaceTension);

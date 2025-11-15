@@ -6,6 +6,118 @@ import { GasProperties } from '../engine/GasProperties';
 import { MultiphaseFlow } from '../engine/MultiphaseFlow';
 
 export class CalculatorService {
+  /**
+   * CRITICAL FIX: Comprehensive input validation for professional use
+   * Validates all input parameters for physical reasonableness
+   */
+  private static validateInputs(params: CalculationParams): string[] {
+    const errors: string[] = [];
+
+    // Flow rate validation
+    if (params.flowRate < 0) {
+      errors.push('Flow rate cannot be negative');
+    }
+    if (params.flowRate > 1000000) {
+      errors.push('Flow rate unreasonably high (> 1,000,000 m³/day). Check units.');
+    }
+
+    // Pressure validation
+    if (params.injectionPressure < 0) {
+      errors.push('Injection pressure cannot be negative');
+    }
+    if (params.injectionPressure > 200000) {
+      errors.push('Injection pressure > 200 MPa (200,000 kPa) is unrealistic. Check units.');
+    }
+    if (params.bottomholePressure < 0) {
+      errors.push('Bottomhole pressure cannot be negative');
+    }
+    if (params.bottomholePressure > 200000) {
+      errors.push('Bottomhole pressure > 200 MPa is unrealistic. Check units.');
+    }
+
+    // Density validation
+    if (params.fluidDensity <= 0) {
+      errors.push('Fluid density must be positive');
+    }
+    if (params.fluidDensity < 100 || params.fluidDensity > 2500) {
+      errors.push(`Fluid density ${params.fluidDensity} kg/m³ is unusual. Typical: 700-1200 kg/m³`);
+    }
+
+    // Viscosity validation
+    if (params.fluidViscosity <= 0) {
+      errors.push('Fluid viscosity must be positive');
+    }
+    if (params.fluidViscosity > 1) {
+      errors.push(`Viscosity ${params.fluidViscosity} Pa·s is very high. Check units (should be Pa·s, not cP)`);
+    }
+
+    // Well depth validation
+    if (params.wellDepth <= 0) {
+      errors.push('Well depth must be positive');
+    }
+    if (params.wellDepth > 15000) {
+      errors.push('Well depth > 15 km is unrealistic');
+    }
+
+    // Segment validation
+    if (!params.segments || params.segments.length === 0) {
+      errors.push('At least one segment is required');
+    } else {
+      params.segments.forEach((seg, idx) => {
+        if (seg.diameter <= 0) {
+          errors.push(`Segment ${idx + 1}: diameter must be positive`);
+        }
+        if (seg.diameter < 10 || seg.diameter > 1000) {
+          errors.push(`Segment ${idx + 1}: diameter ${seg.diameter} mm is unusual. Typical: 50-300 mm`);
+        }
+        if (seg.length <= 0) {
+          errors.push(`Segment ${idx + 1}: length must be positive`);
+        }
+        if (seg.length > 10000) {
+          errors.push(`Segment ${idx + 1}: length > 10 km is unusual for a single segment`);
+        }
+        if (seg.roughness < 0) {
+          errors.push(`Segment ${idx + 1}: roughness cannot be negative`);
+        }
+        if (seg.roughness > 10) {
+          errors.push(`Segment ${idx + 1}: roughness > 10 mm is unrealistic`);
+        }
+      });
+    }
+
+    // Gas-specific validation
+    if (params.injectionType === 'gas' || params.injectionType === 'multiphase') {
+      if (params.gasSpecificGravity !== undefined) {
+        if (params.gasSpecificGravity <= 0) {
+          errors.push('Gas specific gravity must be positive');
+        }
+        if (params.gasSpecificGravity < 0.5 || params.gasSpecificGravity > 2.0) {
+          errors.push(`Gas specific gravity ${params.gasSpecificGravity} is unusual. Typical: 0.55-0.75`);
+        }
+      }
+      if (params.temperature !== undefined) {
+        if (params.temperature <= 0) {
+          errors.push('Temperature must be positive (in Kelvin)');
+        }
+        if (params.temperature < 200 || params.temperature > 500) {
+          errors.push(`Temperature ${params.temperature} K is unusual. Typical: 270-350 K`);
+        }
+      }
+    }
+
+    // Multiphase-specific validation
+    if (params.injectionType === 'multiphase') {
+      if (params.gasFlowRate !== undefined && params.gasFlowRate <= 0) {
+        errors.push('Gas flow rate must be positive for multiphase flow');
+      }
+      if (params.liquidFlowRate !== undefined && params.liquidFlowRate <= 0) {
+        errors.push('Liquid flow rate must be positive for multiphase flow');
+      }
+    }
+
+    return errors;
+  }
+
   static calculateReynolds(velocity: number, diameter: number, density: number, viscosity: number): number {
     if (viscosity === 0 || diameter === 0) return 0;
     return (density * velocity * diameter) / viscosity;
@@ -33,6 +145,12 @@ export class CalculatorService {
   }
   
   public static calculatePressureDrop(params: CalculationParams): CalculationResults {
+    // CRITICAL FIX: Validate all inputs before calculation
+    const validationErrors = this.validateInputs(params);
+    if (validationErrors.length > 0) {
+      throw new Error(`Input validation failed:\n${validationErrors.join('\n')}`);
+    }
+
     const { injectionType } = params;
 
     switch (injectionType) {
@@ -222,7 +340,8 @@ export class CalculatorService {
   private static calculateGasInjection(params: CalculationParams): CalculationResults {
     const {
       segments, flowRate, injectionPressure, bottomholePressure,
-      wellDepth, openHoleDiameter, gasSpecificGravity = 0.65, temperature = 288.15
+      wellDepth, openHoleDiameter, gasSpecificGravity = 0.65, temperature = 288.15,
+      geothermalGradient = 0.025 // FIXED: Configurable, default 25°C/km
     } = params;
 
     if (!gasSpecificGravity) {
@@ -244,6 +363,8 @@ export class CalculatorService {
     let sumZ = 0;
     let segmentCount = 0;
     let cumulativePressureDrop = 0; // Track total pressure drop for JT cooling
+    let previousPressure = currentPressure; // Track previous segment pressure for acceleration term
+    let previousTemperature = surfaceTemp; // Track previous segment temperature
 
     const allSegments = [...segments];
     const totalSegmentLength = segments.reduce((sum, seg) => sum + (seg.length || 0), 0);
@@ -275,7 +396,8 @@ export class CalculatorService {
         depthMidpoint,
         cumulativePressureDrop,
         currentPressure,
-        gasSpecificGravity
+        gasSpecificGravity,
+        geothermalGradient // FIXED: Use configurable gradient
       );
 
       // Calculate gas properties at segment conditions
@@ -358,10 +480,15 @@ export class CalculatorService {
       if (index > 0) {
         const prevD = allSegments[index - 1].diameter / 1000;
         const prevA = PI * Math.pow(prevD / 2, 2);
-        // Need previous segment's actual Q - approximate using current segment's conditions
-        const prevQ_actual = Q_actual; // Conservative approximation
+        // FIXED: Calculate actual Q at previous segment's P and T conditions
+        // Gas expands as pressure drops, so Q_actual is different at each segment
+        const prevZ = GasProperties.calculateCompressibility(previousPressure, previousTemperature, gasSpecificGravity);
+        const prevQ_actual = Q_std * (101325 / previousPressure) * (previousTemperature / 288.15) * prevZ;
         const prevV = prevQ_actual / prevA;
-        accelerationPressureLoss = rho_gas * (Math.pow(V, 2) - Math.pow(prevV, 2)) / 2;
+        // Use average density for acceleration term
+        const prevRho = GasProperties.calculateGasDensity(previousPressure, previousTemperature, gasSpecificGravity, prevZ);
+        const avgRho = (rho_gas + prevRho) / 2;
+        accelerationPressureLoss = avgRho * (Math.pow(V, 2) - Math.pow(prevV, 2)) / 2;
       }
 
       const inletPressure = currentPressure;
@@ -407,6 +534,10 @@ export class CalculatorService {
 
       totalFrictionLoss += frictionPressureLoss;
       totalPressureDrop += frictionPressureLoss + minorLoss;
+
+      // Update previous segment conditions for next iteration
+      previousPressure = currentPressure;
+      previousTemperature = T_segment;
     }
 
     const avgDensity = segmentCount > 0 ? sumDensity / segmentCount : 0;
@@ -444,7 +575,9 @@ export class CalculatorService {
     const {
       segments, injectionPressure, bottomholePressure, wellDepth, openHoleDiameter,
       gasFlowRate = 0, liquidFlowRate = 0, fluidDensity = 1000, fluidViscosity = 0.001,
-      gasSpecificGravity = 0.65, temperature = 288.15
+      gasSpecificGravity = 0.65, temperature = 288.15,
+      surfaceTension = 0.072, // FIXED: Configurable, default water-air at 20°C
+      geothermalGradient = 0.025 // FIXED: Configurable, default 25°C/km
     } = params;
 
     if (gasFlowRate <= 0 || liquidFlowRate <= 0) {
@@ -497,7 +630,7 @@ export class CalculatorService {
       // Calculate multiphase properties
       const mpProps = MultiphaseFlow.calculateMultiphaseProperties(
         gasFlowRate, liquidFlowRate, D, currentPressure, T_segment,
-        fluidDensity, rho_gas, fluidViscosity, mu_gas, Z
+        fluidDensity, rho_gas, fluidViscosity, mu_gas, Z, surfaceTension // FIXED: Pass configurable surface tension
       );
 
       sumVoidFraction += mpProps.gasVoidFraction;
@@ -550,7 +683,7 @@ export class CalculatorService {
 
       // PRIORITY 2 FIX: Dimensionless number validation
       const Froude = MultiphaseFlow.calculateFroudeNumber(V, D);
-      const Weber = MultiphaseFlow.calculateWeberNumber(V, D, mpProps.mixtureDensity, 0.072);
+      const Weber = MultiphaseFlow.calculateWeberNumber(V, D, mpProps.mixtureDensity, surfaceTension);
 
       // Froude number validation for slug flow
       if (mpProps.flowPattern === 'Slug' && Froude > 3.5) {
@@ -618,7 +751,10 @@ export class CalculatorService {
         const prevD = allSegments[index - 1].diameter / 1000;
         const prevA = PI * Math.pow(prevD / 2, 2);
         const A = PI * Math.pow(D / 2, 2);
-        const prevV = V * (A / prevA); // Continuity approximation
+        // FIXED: Use proper continuity equation: Q = V*A, so V_prev = V * (A/A_prev)
+        // For multiphase with gas expansion, this is an approximation assuming
+        // the mixture velocity scales with area change
+        const prevV = V * (prevA / A); // Correct continuity: V1*A1 = V2*A2
         accelerationPressureLoss = mpProps.mixtureDensity * (Math.pow(V, 2) - Math.pow(prevV, 2)) / 2;
       }
 

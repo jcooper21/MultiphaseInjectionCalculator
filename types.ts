@@ -78,4 +78,7 @@ export interface CalculationParams {
   gasFlowRate?: number;
   liquidFlowRate?: number;
   gasDensity?: number;
+  // FIXED: Configurable constants (previously hardcoded)
+  surfaceTension?: number; // N/m, default 0.072 for water-air at 20°C
+  geothermalGradient?: number; // K/m, default 0.025 K/m
 }
