@@ -751,10 +751,11 @@ export class CalculatorService {
         const prevD = allSegments[index - 1].diameter / 1000;
         const prevA = PI * Math.pow(prevD / 2, 2);
         const A = PI * Math.pow(D / 2, 2);
-        // FIXED: Use proper continuity equation: Q = V*A, so V_prev = V * (A/A_prev)
+        // Continuity equation: Q = V*A, conserved between segments
+        // prevV * prevA = V * A, therefore: prevV = V * (A / prevA)
         // For multiphase with gas expansion, this is an approximation assuming
-        // the mixture velocity scales with area change
-        const prevV = V * (prevA / A); // Correct continuity: V1*A1 = V2*A2
+        // the mixture volumetric flow rate is approximately conserved
+        const prevV = V * (A / prevA); // Continuity: prevV*prevA = V*A
         accelerationPressureLoss = mpProps.mixtureDensity * (Math.pow(V, 2) - Math.pow(prevV, 2)) / 2;
       }
 
