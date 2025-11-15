@@ -149,7 +149,19 @@ export class CalculatorService {
   }
 
   static calculateReynolds(velocity: number, diameter: number, density: number, viscosity: number): number {
-    if (viscosity === 0 || diameter === 0) return 0;
+    // PROFESSIONAL REVIEW FIX: Throw error instead of returning 0 for invalid inputs
+    if (viscosity <= 0) {
+      throw new Error(
+        `Invalid viscosity for Reynolds number calculation: ${viscosity} Pa·s. ` +
+        `Viscosity must be positive. Check fluid properties.`
+      );
+    }
+    if (diameter <= 0) {
+      throw new Error(
+        `Invalid diameter for Reynolds number calculation: ${diameter} m. ` +
+        `Diameter must be positive. Check segment geometry.`
+      );
+    }
     return (density * velocity * diameter) / viscosity;
   }
 
@@ -162,7 +174,13 @@ export class CalculatorService {
   }
   
   static calculateFrictionFactor(Re: number, relativeRoughness: number): number {
-    if (Re <= 0) return 0;
+    // PROFESSIONAL REVIEW FIX #2: Throw error for invalid Reynolds number
+    if (Re <= 0) {
+      throw new Error(
+        `Invalid Reynolds number for friction factor calculation: Re=${Re}. ` +
+        `Reynolds number must be positive. This typically indicates zero flow velocity or invalid fluid properties.`
+      );
+    }
     if (Re < LAMINAR_FLOW_LIMIT) return 64 / Re;
     if (Re >= LAMINAR_FLOW_LIMIT && Re < TURBULENT_FLOW_START) {
       // Linear interpolation for transitional flow
@@ -399,11 +417,15 @@ export class CalculatorService {
     params: CalculationParams,
     limits: Required<ValidationLimits>
   ): CalculationResults {
+    // PROFESSIONAL REVIEW FIX #3: Use nullish coalescing for better type safety
     const {
       segments, flowRate, injectionPressure, bottomholePressure,
-      wellDepth, openHoleDiameter, gasSpecificGravity = 0.65, temperature = 288.15,
-      geothermalGradient = 0.025 // FIXED: Configurable, default 25°C/km
+      wellDepth, openHoleDiameter
     } = params;
+
+    const gasSpecificGravity = params.gasSpecificGravity ?? 0.65;
+    const temperature = params.temperature ?? 288.15;
+    const geothermalGradient = params.geothermalGradient ?? 0.025; // Default 25°C/km
 
     if (!gasSpecificGravity) {
       throw new Error('Gas specific gravity is required for gas injection calculations');
@@ -658,13 +680,19 @@ export class CalculatorService {
     params: CalculationParams,
     limits: Required<ValidationLimits>
   ): CalculationResults {
+    // PROFESSIONAL REVIEW FIX #3: Use nullish coalescing for better type safety
     const {
-      segments, injectionPressure, bottomholePressure, wellDepth, openHoleDiameter,
-      gasFlowRate = 0, liquidFlowRate = 0, fluidDensity = 1000, fluidViscosity = 0.001,
-      gasSpecificGravity = 0.65, temperature = 288.15,
-      surfaceTension = 0.072, // FIXED: Configurable, default water-air at 20°C
-      geothermalGradient = 0.025 // FIXED: Configurable, default 25°C/km
+      segments, injectionPressure, bottomholePressure, wellDepth, openHoleDiameter
     } = params;
+
+    const gasFlowRate = params.gasFlowRate ?? 0;
+    const liquidFlowRate = params.liquidFlowRate ?? 0;
+    const fluidDensity = params.fluidDensity ?? 1000;
+    const fluidViscosity = params.fluidViscosity ?? 0.001;
+    const gasSpecificGravity = params.gasSpecificGravity ?? 0.65;
+    const temperature = params.temperature ?? 288.15;
+    const surfaceTension = params.surfaceTension ?? 0.072; // Default water-air at 20°C
+    const geothermalGradient = params.geothermalGradient ?? 0.025; // Default 25°C/km
 
     if (gasFlowRate <= 0 || liquidFlowRate <= 0) {
       throw new Error('Both gas and liquid flow rates are required for multiphase calculations');
