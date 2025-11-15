@@ -4,6 +4,7 @@ import {
 } from '../constants/physics';
 import { GasProperties } from '../engine/GasProperties';
 import { MultiphaseFlow } from '../engine/MultiphaseFlow';
+import { ValidationLimits, mergeValidationLimits, validateLimits } from '../types/ValidationLimits';
 
 export class CalculatorService {
   /**
@@ -173,7 +174,19 @@ export class CalculatorService {
     return this.calculateTurbulentFriction(Re, relativeRoughness);
   }
   
-  public static calculatePressureDrop(params: CalculationParams): CalculationResults {
+  /**
+   * Calculate pressure drop with optional custom validation limits
+   * @param params Calculation parameters
+   * @param validationLimits Optional custom validation limits (uses defaults if not provided)
+   */
+  public static calculatePressureDrop(
+    params: CalculationParams,
+    validationLimits?: Partial<ValidationLimits>
+  ): CalculationResults {
+    // IMPROVEMENT: Merge user limits with defaults and validate
+    const limits = mergeValidationLimits(validationLimits);
+    validateLimits(limits);
+
     // CRITICAL FIX: Validate all inputs before calculation
     const validationErrors = this.validateInputs(params);
     if (validationErrors.length > 0) {
@@ -184,16 +197,19 @@ export class CalculatorService {
 
     switch (injectionType) {
       case 'gas':
-        return this.calculateGasInjection(params);
+        return this.calculateGasInjection(params, limits);
       case 'multiphase':
-        return this.calculateMultiphaseInjection(params);
+        return this.calculateMultiphaseInjection(params, limits);
       case 'liquid':
       default:
-        return this.calculateLiquidInjection(params);
+        return this.calculateLiquidInjection(params, limits);
     }
   }
 
-  private static calculateLiquidInjection(params: CalculationParams): CalculationResults {
+  private static calculateLiquidInjection(
+    params: CalculationParams,
+    limits: Required<ValidationLimits>
+  ): CalculationResults {
     const {
       segments, flowRate, injectionPressure, bottomholePressure,
       fluidDensity, fluidViscosity, wellDepth, openHoleDiameter
@@ -317,10 +333,10 @@ export class CalculatorService {
       frictionLosses.push({ loss: frictionPressureLoss, regime: flowRegime });
 
       if(segment.id !== -1) {
-        // PRODUCTION FIX: Strict validation for professional petroleum engineering use
-        this.validateCalculationValue(V, 'velocity', index + 1, 0, 50);
-        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 200e6);
-        this.validateCalculationValue(Re, 'Reynolds number', index + 1, 0, 1e8);
+        // PRODUCTION FIX: Strict validation using configurable limits
+        this.validateCalculationValue(V, 'velocity', index + 1, 0, limits.liquidVelocityMax);
+        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, limits.pressureMax);
+        this.validateCalculationValue(Re, 'Reynolds number', index + 1, 0, limits.reynoldsMax);
 
         segmentResults.push({
           segmentNumber: index + 1,
@@ -379,7 +395,10 @@ export class CalculatorService {
     };
   }
 
-  private static calculateGasInjection(params: CalculationParams): CalculationResults {
+  private static calculateGasInjection(
+    params: CalculationParams,
+    limits: Required<ValidationLimits>
+  ): CalculationResults {
     const {
       segments, flowRate, injectionPressure, bottomholePressure,
       wellDepth, openHoleDiameter, gasSpecificGravity = 0.65, temperature = 288.15,
@@ -568,11 +587,11 @@ export class CalculatorService {
             `Equations are INVALID for supersonic flow (M > 1.0). Reduce flow rate or increase diameter.`
           );
         }
-        this.validateCalculationValue(V, 'velocity', index + 1, 0, 150);
-        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 200e6);
-        this.validateCalculationValue(rho_gas, 'gas density', index + 1, 5, 300);
-        this.validateCalculationValue(Z, 'Z-factor', index + 1, 0.2, 1.5);
-        this.validateCalculationValue(T_segment, 'temperature', index + 1, 250, 450);
+        this.validateCalculationValue(V, 'velocity', index + 1, 0, limits.gasVelocityMax);
+        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, limits.pressureMax);
+        this.validateCalculationValue(rho_gas, 'gas density', index + 1, limits.densityMin, limits.densityMax);
+        this.validateCalculationValue(Z, 'Z-factor', index + 1, limits.zFactorMin, limits.zFactorMax);
+        this.validateCalculationValue(T_segment, 'temperature', index + 1, limits.temperatureMin, limits.temperatureMax);
 
         segmentResults.push({
           segmentNumber: index + 1,
@@ -635,7 +654,10 @@ export class CalculatorService {
     };
   }
 
-  private static calculateMultiphaseInjection(params: CalculationParams): CalculationResults {
+  private static calculateMultiphaseInjection(
+    params: CalculationParams,
+    limits: Required<ValidationLimits>
+  ): CalculationResults {
     const {
       segments, injectionPressure, bottomholePressure, wellDepth, openHoleDiameter,
       gasFlowRate = 0, liquidFlowRate = 0, fluidDensity = 1000, fluidViscosity = 0.001,
@@ -867,9 +889,9 @@ export class CalculatorService {
       const flowRegime = Re < LAMINAR_FLOW_LIMIT ? 'Laminar' : Re < TURBULENT_FLOW_START ? 'Transitional' : 'Turbulent';
 
       if (segment.id !== -1) {
-        // PRODUCTION FIX: Strict validation for professional petroleum engineering use
-        this.validateCalculationValue(V, 'mixture velocity', index + 1, 0, 50);
-        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 200e6);
+        // PRODUCTION FIX: Strict validation using configurable limits
+        this.validateCalculationValue(V, 'mixture velocity', index + 1, 0, limits.liquidVelocityMax);
+        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, limits.pressureMax);
         this.validateCalculationValue(mpProps.gasVoidFraction, 'void fraction', index + 1, 0, 1);
         this.validateCalculationValue(mpProps.liquidHoldup, 'liquid holdup', index + 1, 0, 1);
         this.validateCalculationValue(mpProps.mixtureDensity, 'mixture density', index + 1, 10, 2000);

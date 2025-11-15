@@ -90,6 +90,13 @@ export class GasProperties {
 
     // FALLBACK: Beggs-Brill correlation for out-of-range conditions
     // Used when Pr > 15 or Tr > 3.0 (rare in typical injection wells)
+
+    // IMPROVEMENT: Log when fallback method is used for transparency
+    console.info(
+      `ℹ️  Z-factor: Using Beggs-Brill correlation (Pr=${Pr.toFixed(2)}, Tr=${Tr.toFixed(2)} outside Standing-Katz range). ` +
+      `Accuracy: ±2-5% vs ±0.5% for Standing-Katz.`
+    );
+
     let Z: number;
 
     if (Tr >= 1.0) {
@@ -105,9 +112,9 @@ export class GasProperties {
     } else {
       // Subcritical (Tr < 0.7): This shouldn't happen often
       // Use simplified correlation with warning
-      console.warn(
-        `Using simplified correlation for Tr=${Tr.toFixed(2)} < 0.7. ` +
-        `Accuracy may be reduced. Consider using Standing-Katz table extension.`
+      console.info(
+        `ℹ️  Z-factor: Using simplified correlation for very low Tr=${Tr.toFixed(2)} < 0.7. ` +
+        `Accuracy: ±10-20% (low confidence). Standing-Katz range: Tr ≥ 0.7`
       );
 
       // Simple correlation for very low Tr
