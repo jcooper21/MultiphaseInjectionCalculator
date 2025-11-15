@@ -1,0 +1,5 @@
+{
+  "name": "Disposal Well Injection Calculator",
+  "description": "An advanced tool for petroleum and reservoir engineers to model and analyze the fluid dynamics of disposal wells. Calculate pressure profiles, friction losses, and maximum flow rates based on well geometry, fluid properties, and operating conditions.",
+  "requestFramePermissions": []
+}
