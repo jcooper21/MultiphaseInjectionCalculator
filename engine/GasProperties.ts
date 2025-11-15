@@ -40,8 +40,8 @@ export class GasProperties {
   }
 
   /**
-   * Calculate gas compressibility factor (Z-factor) using Standing-Katz correlation
-   * FIXED: Now uses iterative solution for Dranchuk-Abu-Kassem equation
+   * Calculate gas compressibility factor (Z-factor)
+   * Uses simplified Beggs-Brill correlation - industry standard
    * @param pressure Pressure in Pa
    * @param temperature Temperature in K
    * @param specificGravity Specific gravity
@@ -54,53 +54,41 @@ export class GasProperties {
   ): number {
     // Estimate pseudo-critical properties (Sutton correlations)
     const Tpc = 169.2 + 349.5 * specificGravity - 74.0 * Math.pow(specificGravity, 2); // K
-    const Ppc = (4.892 - 0.4048 * specificGravity) * 1e6; // Sutton gives MPa -> convert to Pa
+    const Ppc = (4.892 - 0.4048 * specificGravity) * 1e6; // Pa
 
     // Calculate reduced properties
     const Tr = temperature / Tpc;
-    const Pr = pressure / Ppc; // Both in Pa now
+    const Pr = pressure / Ppc;
 
-    // Simplified Standing-Katz correlation for Z-factor
-    // For Pr < 1.0, Z is approximately 1
-    if (Pr < 1.0) {
-      return 1.0 - 0.36 * Pr / Tr;
+    // For very low pressure, ideal gas
+    if (Pr < 0.2) {
+      return 1.0;
     }
 
-    // FIXED: Iterative solution for Dranchuk-Abu-Kassem equation
-    // Z and rho_r are coupled, so we iterate to convergence
-    const A1 = 0.3265;
-    const A2 = -1.0700;
-    const A3 = -0.5339;
-    const A4 = 0.01569;
-    const A5 = -0.05165;
-    const A6 = 0.5475;
-    const A7 = -0.7361;
-    const A8 = 0.1844;
+    // Beggs-Brill correlation (simplified Standing-Katz approximation)
+    // Valid for 0.2 < Pr < 15 and 1.05 < Tr < 3.0
+    // For Tr > 1.0 (supercritical)
+    let Z: number;
 
-    // Initial guess for Z
-    let Z = 1.0;
-    const maxIterations = 10;
-    const tolerance = 1e-6;
+    if (Tr >= 1.0) {
+      // Use Beggs-Brill explicit equation
+      const A = 1.39 * (Math.pow(Tr - 0.92, 0.5)) - 0.36 * Tr - 0.101;
+      const B = (0.62 - 0.23 * Tr) * Pr +
+                (0.066 / (Tr - 0.86) - 0.037) * Pr * Pr +
+                0.32 * Math.pow(Pr, 6) / Math.pow(10, 9 * (Tr - 1));
+      const C = 0.132 - 0.32 * Math.log10(Tr);
+      const D = Math.pow(10, 0.3106 - 0.49 * Tr + 0.1824 * Tr * Tr);
 
-    for (let i = 0; i < maxIterations; i++) {
-      const Z_old = Z;
-
-      // Calculate reduced density from current Z
-      // rho_r = Pr / (Z * Tr)
-      const rho_r = 0.27 * Pr / (Z * Tr);
-
-      // Calculate new Z from Dranchuk-Abu-Kassem equation
-      Z = A1 + (A2 / Tr) + (A3 / Math.pow(Tr, 3)) +
-          (A4 / Math.pow(Tr, 4)) + (A5 / Math.pow(Tr, 5)) +
-          rho_r * (A6 + (A7 / Tr) + (A8 / Math.pow(Tr, 2)));
-
-      // Check convergence
-      if (Math.abs(Z - Z_old) < tolerance) {
-        break;
-      }
+      Z = A + (1 - A) / Math.exp(B) + C * Math.pow(Pr, D);
+    } else {
+      // For Tr < 1.0 (subcritical - unusual for natural gas injection)
+      // Use simplified correlation with warning
+      // Typically Z decreases below critical temperature
+      Z = 1.0 - 0.3 * Pr * (1.0 - Tr);
     }
 
-    return Math.max(0.2, Math.min(1.5, Z)); // Constrain to reasonable range
+    // Constrain to physically reasonable range
+    return Math.max(0.5, Math.min(1.2, Z));
   }
 
   /**

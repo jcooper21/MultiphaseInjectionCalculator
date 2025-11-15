@@ -35,20 +35,24 @@ export class CalculatorService {
       errors.push('Bottomhole pressure > 200 MPa is unrealistic. Check units.');
     }
 
-    // Density validation
-    if (params.fluidDensity <= 0) {
-      errors.push('Fluid density must be positive');
-    }
-    if (params.fluidDensity < 100 || params.fluidDensity > 2500) {
-      errors.push(`Fluid density ${params.fluidDensity} kg/m³ is unusual. Typical: 700-1200 kg/m³`);
+    // Density validation (only for liquid and multiphase)
+    if (params.injectionType === 'liquid' || params.injectionType === 'multiphase') {
+      if (params.fluidDensity <= 0) {
+        errors.push('Fluid density must be positive');
+      }
+      if (params.fluidDensity < 100 || params.fluidDensity > 2500) {
+        errors.push(`Fluid density ${params.fluidDensity} kg/m³ is unusual. Typical: 700-1200 kg/m³`);
+      }
     }
 
-    // Viscosity validation
-    if (params.fluidViscosity <= 0) {
-      errors.push('Fluid viscosity must be positive');
-    }
-    if (params.fluidViscosity > 1) {
-      errors.push(`Viscosity ${params.fluidViscosity} Pa·s is very high. Check units (should be Pa·s, not cP)`);
+    // Viscosity validation (only for liquid and multiphase)
+    if (params.injectionType === 'liquid' || params.injectionType === 'multiphase') {
+      if (params.fluidViscosity <= 0) {
+        errors.push('Fluid viscosity must be positive');
+      }
+      if (params.fluidViscosity > 1) {
+        errors.push(`Viscosity ${params.fluidViscosity} Pa·s is very high. Check units (should be Pa·s, not cP)`);
+      }
     }
 
     // Well depth validation
@@ -116,6 +120,31 @@ export class CalculatorService {
     }
 
     return errors;
+  }
+
+  /**
+   * ROBUSTNESS FIX: Validate critical calculation values for NaN/Infinity
+   * Throws error if invalid values detected
+   */
+  private static validateCalculationValue(
+    value: number,
+    name: string,
+    segmentNumber: number,
+    minValue: number = -Infinity,
+    maxValue: number = Infinity
+  ): void {
+    if (!isFinite(value) || isNaN(value)) {
+      throw new Error(
+        `Invalid ${name} calculated in segment ${segmentNumber}: ${value}. ` +
+        `This indicates a numerical error in the calculations. Please check input parameters.`
+      );
+    }
+    if (value < minValue || value > maxValue) {
+      throw new Error(
+        `${name} out of physically reasonable range in segment ${segmentNumber}: ${value}. ` +
+        `Expected range: ${minValue} to ${maxValue}`
+      );
+    }
   }
 
   static calculateReynolds(velocity: number, diameter: number, density: number, viscosity: number): number {
@@ -278,8 +307,13 @@ export class CalculatorService {
 
       const flowRegime = Re < LAMINAR_FLOW_LIMIT ? 'Laminar' : Re < TURBULENT_FLOW_START ? 'Transitional' : 'Turbulent';
       frictionLosses.push({ loss: frictionPressureLoss, regime: flowRegime });
-      
+
       if(segment.id !== -1) {
+        // ROBUSTNESS FIX: Validate critical values before adding to results
+        this.validateCalculationValue(V, 'velocity', index + 1, 0, 100);
+        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 300e6);
+        this.validateCalculationValue(Re, 'Reynolds number', index + 1, 0, 1e8);
+
         segmentResults.push({
           segmentNumber: index + 1,
           diameter: segment.diameter,
@@ -510,6 +544,13 @@ export class CalculatorService {
       const flowRegime = Re < LAMINAR_FLOW_LIMIT ? 'Laminar' : Re < TURBULENT_FLOW_START ? 'Transitional' : 'Turbulent';
 
       if (segment.id !== -1) {
+        // ROBUSTNESS FIX: Validate critical values before adding to results
+        this.validateCalculationValue(V, 'velocity', index + 1, 0, 500);
+        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 300e6);
+        this.validateCalculationValue(rho_gas, 'gas density', index + 1, 0.1, 500);
+        this.validateCalculationValue(Z, 'Z-factor', index + 1, 0.2, 1.5);
+        this.validateCalculationValue(T_segment, 'temperature', index + 1, 200, 600);
+
         segmentResults.push({
           segmentNumber: index + 1,
           diameter: segment.diameter,
@@ -664,20 +705,27 @@ export class CalculatorService {
       // API RP 14E erosion velocity: V_erosion = c / √ρ
       // where c = 100 for continuous service, 125 for intermittent
       const c_erosion = 100; // Conservative for continuous service
-      const V_erosion_gas = c_erosion / Math.sqrt(rho_gas);
-      const V_erosion_liquid = c_erosion / Math.sqrt(fluidDensity);
 
-      if (mpProps.actualGasVelocity && mpProps.actualGasVelocity > V_erosion_gas) {
-        const hasErosionWarning = warnings.some(w => w.includes('Erosion'));
-        if (!hasErosionWarning) {
-          warnings.push(`⚠️ EROSION WARNING: Actual gas velocity ${mpProps.actualGasVelocity.toFixed(1)} m/s exceeds erosion limit ${V_erosion_gas.toFixed(1)} m/s in segment ${index + 1}. Expect accelerated wear. Consider larger diameter.`);
+      // ROBUSTNESS FIX: Guard against division by very small densities
+      // At very low densities (< 1 kg/m³), erosion velocity becomes unrealistically high
+      // Skip erosion check in these cases as the correlation is not valid
+      if (rho_gas > 1 && mpProps.actualGasVelocity) {
+        const V_erosion_gas = c_erosion / Math.sqrt(rho_gas);
+        if (isFinite(V_erosion_gas) && mpProps.actualGasVelocity > V_erosion_gas) {
+          const hasErosionWarning = warnings.some(w => w.includes('Erosion'));
+          if (!hasErosionWarning) {
+            warnings.push(`⚠️ EROSION WARNING: Actual gas velocity ${mpProps.actualGasVelocity.toFixed(1)} m/s exceeds erosion limit ${V_erosion_gas.toFixed(1)} m/s in segment ${index + 1}. Expect accelerated wear. Consider larger diameter.`);
+          }
         }
       }
 
-      if (mpProps.actualLiquidVelocity && mpProps.actualLiquidVelocity > V_erosion_liquid) {
-        const hasErosionWarning = warnings.some(w => w.includes('Erosion'));
-        if (!hasErosionWarning) {
-          warnings.push(`⚠️ EROSION WARNING: Actual liquid velocity ${mpProps.actualLiquidVelocity.toFixed(1)} m/s exceeds erosion limit ${V_erosion_liquid.toFixed(1)} m/s in segment ${index + 1}. Expect accelerated wear.`);
+      if (fluidDensity > 1 && mpProps.actualLiquidVelocity) {
+        const V_erosion_liquid = c_erosion / Math.sqrt(fluidDensity);
+        if (isFinite(V_erosion_liquid) && mpProps.actualLiquidVelocity > V_erosion_liquid) {
+          const hasErosionWarning = warnings.some(w => w.includes('Erosion'));
+          if (!hasErosionWarning) {
+            warnings.push(`⚠️ EROSION WARNING: Actual liquid velocity ${mpProps.actualLiquidVelocity.toFixed(1)} m/s exceeds erosion limit ${V_erosion_liquid.toFixed(1)} m/s in segment ${index + 1}. Expect accelerated wear.`);
+          }
         }
       }
 
@@ -729,7 +777,9 @@ export class CalculatorService {
         const A = PI * Math.pow(D / 2, 2);
 
         if (A > 0 && prevA > 0) {
-          const prevV = V * (prevA / A);
+          // CRITICAL FIX: Continuity equation: prevV * prevA = V * A
+          // Therefore: prevV = V * (A / prevA)
+          const prevV = V * (A / prevA);
 
           if (A < prevA) {
             const areaRatio = A / prevA;
@@ -780,6 +830,13 @@ export class CalculatorService {
       const flowRegime = Re < LAMINAR_FLOW_LIMIT ? 'Laminar' : Re < TURBULENT_FLOW_START ? 'Transitional' : 'Turbulent';
 
       if (segment.id !== -1) {
+        // ROBUSTNESS FIX: Validate critical values before adding to results
+        this.validateCalculationValue(V, 'mixture velocity', index + 1, 0, 100);
+        this.validateCalculationValue(currentPressure, 'outlet pressure', index + 1, 0, 300e6);
+        this.validateCalculationValue(mpProps.gasVoidFraction, 'void fraction', index + 1, 0, 1);
+        this.validateCalculationValue(mpProps.liquidHoldup, 'liquid holdup', index + 1, 0, 1);
+        this.validateCalculationValue(mpProps.mixtureDensity, 'mixture density', index + 1, 1, 2500);
+
         segmentResults.push({
           segmentNumber: index + 1,
           diameter: segment.diameter,
